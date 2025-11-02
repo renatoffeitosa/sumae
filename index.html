@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — pistas.glb (play once, freeze@100) — ROBUST</title>
+  <title>WebAR MindAR — pistas.glb (loop frames 0–500)</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
-  <!-- animation-mixer helper (optional but useful) -->
+  <!-- animation-mixer (aframe-extras) -->
   <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js" defer></script>
 
   <style>
@@ -33,39 +33,25 @@
 
     <a-camera look-controls="enabled:false"></a-camera>
 
-    <a-entity mindar-image-target="targetIndex: 0" id="anchor">
+    <a-entity mindar-image-target="targetIndex: 0">
       <a-entity id="pistas"
         gltf-model="#pistasmodel"
         position="0 0 0.02"
         rotation="0 0 0"
         scale="0.35 0.35 0.35"
-        play-once-frames="start:0; end:100; fps:24">
+        animation-mixer="clip:*; loop: repeat; repetitions: Infinity"
+        clip-range="start:0; end:500; fps:30">
       </a-entity>
     </a-entity>
   </a-scene>
 
   <script>
-    // Utilitário: tenta obter a lista de animações de diferentes fontes (maior compatibilidade)
-    function getAnimations(el) {
-      // 1) A-Frame adiciona o objeto 3D sob a chave 'mesh'
-      const mesh = el.getObject3D && el.getObject3D('mesh');
-      if (mesh && mesh.animations && mesh.animations.length) return mesh.animations;
-
-      // 2) Evento model-loaded normalmente fornece model.animations (já foi processado, mas guardamos fallback)
-      if (el._lastModelAnimations && el._lastModelAnimations.length) return el._lastModelAnimations;
-
-      // 3) Alguns GLB expõem animações no root object (menos comum)
-      const obj = el.object3D;
-      if (obj && obj.animations && obj.animations.length) return obj.animations;
-
-      return [];
-    }
-
-    AFRAME.registerComponent('play-once-frames', {
+    // Mantém a animação looping apenas dentro do intervalo [start, end) em frames.
+    AFRAME.registerComponent('clip-range', {
       schema: {
         start: {type: 'int', default: 0},
-        end:   {type: 'int', default: 100},
-        fps:   {type: 'number', default: 24}
+        end:   {type: 'int', default: 500},
+        fps:   {type: 'number', default: 30}
       },
       init: function () {
         this.mixer = null;
@@ -73,53 +59,28 @@
         this.clip = null;
         this.startSec = 0;
         this.endSec = 0;
-        this.done = false;
 
-        this.onModel = this.onModel.bind(this);
-        this.onFound = this.onFound.bind(this);
-        this.onLost  = this.onLost.bind(this);
-
-        this.el.addEventListener('model-loaded', this.onModel);
-
-        // Guarda animações do evento como fallback
-        this.el.addEventListener('model-loaded', (e)=>{
-          const mdl = e.detail.model;
-          if (mdl && mdl.animations) {
-            this.el._lastModelAnimations = mdl.animations;
-          }
-        });
-
-        // Ouve no anchor (mindar-image-target) os eventos de tracking
-        this.anchorEl = this.el.closest('[mindar-image-target]') || this.el.parentEl;
-        if (this.anchorEl) {
-          this.anchorEl.addEventListener('targetFound', this.onFound);
-          this.anchorEl.addEventListener('targetLost', this.onLost);
-        }
+        this._onModel = this._onModel.bind(this);
+        this.el.addEventListener('model-loaded', this._onModel);
       },
       remove: function () {
-        this.el.removeEventListener('model-loaded', this.onModel);
-        if (this.anchorEl) {
-          this.anchorEl.removeEventListener('targetFound', this.onFound);
-          this.anchorEl.removeEventListener('targetLost', this.onLost);
-        }
+        this.el.removeEventListener('model-loaded', this._onModel);
         if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
       },
-      onModel: function () {
-        const anims = getAnimations(this.el);
-        if (!anims.length) {
-          console.warn('[play-once-frames] Nenhuma animação encontrada em pistas.glb.');
+      _onModel: function (e) {
+        const model = e.detail.model;
+        const clips = (model && model.animations) || [];
+        if (!clips.length) {
+          console.warn('[clip-range] Nenhuma animação encontrada em pistas.glb.');
           return;
         }
-        // Usa o primeiro clipe por padrão
-        this.clip = anims[0];
-
-        // Mixer no mesh real
-        const mesh = this.el.getObject3D('mesh') || this.el.object3D;
-        this.mixer = new THREE.AnimationMixer(mesh);
+        this.clip = clips[0];
+        this.mixer = new THREE.AnimationMixer(model);
         this.action = this.mixer.clipAction(this.clip);
-        this.action.loop = THREE.LoopOnce;
-        this.action.clampWhenFinished = true;
+        this.action.loop = THREE.LoopRepeat;
+        this.action.clampWhenFinished = false;
         this.action.enabled = true;
+        this.action.play();
 
         const fps = Math.max(1, this.data.fps);
         this.startSec = Math.max(0, (this.data.start || 0) / fps);
@@ -127,38 +88,27 @@
         const endSecRequested = (this.data.end || 0) / fps;
         this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
 
-        // Inicializa parado no início
-        this.action.paused = true;
+        // Começa exatamente no início do intervalo
         this.action.time = this.startSec;
         this.mixer.setTime(this.startSec);
-        this.done = false;
-      },
-      onFound: function () {
-        if (!this.action) return;
-        this.done = false;
-        this.action.reset();
-        this.action.loop = THREE.LoopOnce;
-        this.action.clampWhenFinished = true;
-        this.action.paused = false;
-        this.action.play();
-      },
-      onLost: function () {
-        if (!this.action) return;
-        this.action.paused = true;
-        this.action.time = this.startSec;
-        if (this.mixer) this.mixer.setTime(this.startSec);
-        this.done = false;
       },
       tick: function (t, dt) {
-        if (!this.mixer || !this.action || this.done) return;
+        if (!this.mixer || !this.action) return;
         const delta = (dt || 0) / 1000;
         this.mixer.update(delta);
 
-        if (this.action.time >= this.endSec) {
-          this.action.time = this.endSec;
-          this.mixer.setTime(this.endSec);
-          this.action.paused = true;
-          this.done = true;
+        // Loop contínuo apenas no intervalo [startSec, endSec)
+        const range = this.endSec - this.startSec;
+        if (range <= 0) return;
+        let cur = this.action.time;
+        if (cur < this.startSec) {
+          cur = this.startSec + ((cur - this.startSec) % range + range) % range;
+          this.action.time = cur;
+          this.mixer.setTime(cur);
+        } else if (cur >= this.endSec) {
+          cur = this.startSec + ((cur - this.startSec) % range);
+          this.action.time = cur;
+          this.mixer.setTime(cur);
         }
       }
     });
