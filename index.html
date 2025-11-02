@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — pistas.glb (play once, freeze@100) — FIX</title>
+  <title>WebAR MindAR — pistas.glb (play once, freeze@100) — ROBUST</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
+  <!-- animation-mixer helper (optional but useful) -->
+  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js" defer></script>
 
   <style>
     html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
@@ -25,7 +27,7 @@
     device-orientation-permission-ui="enabled:false"
     style="width:100vw; height:100vh;">
 
-    <a-assets timeout="25000">
+    <a-assets timeout="30000">
       <a-asset-item id="pistasmodel" src="./pistas.glb"></a-asset-item>
     </a-assets>
 
@@ -43,8 +45,22 @@
   </a-scene>
 
   <script>
-    // Reproduz UMA VEZ do frame 'start' ao 'end' e congela no 'end' até o target se perder.
-    // Corrigido: ouve targetFound/targetLost no elemento ÂNCORA (mindar-image-target), não no modelo.
+    // Utilitário: tenta obter a lista de animações de diferentes fontes (maior compatibilidade)
+    function getAnimations(el) {
+      // 1) A-Frame adiciona o objeto 3D sob a chave 'mesh'
+      const mesh = el.getObject3D && el.getObject3D('mesh');
+      if (mesh && mesh.animations && mesh.animations.length) return mesh.animations;
+
+      // 2) Evento model-loaded normalmente fornece model.animations (já foi processado, mas guardamos fallback)
+      if (el._lastModelAnimations && el._lastModelAnimations.length) return el._lastModelAnimations;
+
+      // 3) Alguns GLB expõem animações no root object (menos comum)
+      const obj = el.object3D;
+      if (obj && obj.animations && obj.animations.length) return obj.animations;
+
+      return [];
+    }
+
     AFRAME.registerComponent('play-once-frames', {
       schema: {
         start: {type: 'int', default: 0},
@@ -63,16 +79,21 @@
         this.onFound = this.onFound.bind(this);
         this.onLost  = this.onLost.bind(this);
 
-        // Ouve quando o modelo carregar
         this.el.addEventListener('model-loaded', this.onModel);
 
-        // Procura o elemento âncora (mindar-image-target) mais próximo
+        // Guarda animações do evento como fallback
+        this.el.addEventListener('model-loaded', (e)=>{
+          const mdl = e.detail.model;
+          if (mdl && mdl.animations) {
+            this.el._lastModelAnimations = mdl.animations;
+          }
+        });
+
+        // Ouve no anchor (mindar-image-target) os eventos de tracking
         this.anchorEl = this.el.closest('[mindar-image-target]') || this.el.parentEl;
         if (this.anchorEl) {
           this.anchorEl.addEventListener('targetFound', this.onFound);
           this.anchorEl.addEventListener('targetLost', this.onLost);
-        } else {
-          console.warn('[play-once-frames] Anchor (mindar-image-target) não encontrado; a animação não será disparada.');
         }
       },
       remove: function () {
@@ -83,18 +104,21 @@
         }
         if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
       },
-      onModel: function (e) {
-        const model = e.detail.model;
-        const clips = (model && model.animations) || [];
-        if (!clips.length) {
+      onModel: function () {
+        const anims = getAnimations(this.el);
+        if (!anims.length) {
           console.warn('[play-once-frames] Nenhuma animação encontrada em pistas.glb.');
           return;
         }
-        this.clip = clips[0];
-        this.mixer = new THREE.AnimationMixer(model);
+        // Usa o primeiro clipe por padrão
+        this.clip = anims[0];
+
+        // Mixer no mesh real
+        const mesh = this.el.getObject3D('mesh') || this.el.object3D;
+        this.mixer = new THREE.AnimationMixer(mesh);
         this.action = this.mixer.clipAction(this.clip);
         this.action.loop = THREE.LoopOnce;
-        this.action.clampWhenFinished = true; // mantém o último frame
+        this.action.clampWhenFinished = true;
         this.action.enabled = true;
 
         const fps = Math.max(1, this.data.fps);
@@ -103,15 +127,14 @@
         const endSecRequested = (this.data.end || 0) / fps;
         this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
 
-        // Inicializa congelado no início
+        // Inicializa parado no início
         this.action.paused = true;
         this.action.time = this.startSec;
         this.mixer.setTime(this.startSec);
         this.done = false;
       },
       onFound: function () {
-        if (!this.action) return; // espera model-loaded
-        // Reinicia e toca uma vez
+        if (!this.action) return;
         this.done = false;
         this.action.reset();
         this.action.loop = THREE.LoopOnce;
@@ -121,7 +144,6 @@
       },
       onLost: function () {
         if (!this.action) return;
-        // Ao perder o target: volta ao início e pausa (para reproduzir novamente no próximo found)
         this.action.paused = true;
         this.action.time = this.startSec;
         if (this.mixer) this.mixer.setTime(this.startSec);
@@ -132,7 +154,6 @@
         const delta = (dt || 0) / 1000;
         this.mixer.update(delta);
 
-        // Prende o tempo da animação em endSec e marca como concluído
         if (this.action.time >= this.endSec) {
           this.action.time = this.endSec;
           this.mixer.setTime(this.endSec);
