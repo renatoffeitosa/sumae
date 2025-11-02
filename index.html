@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — GLB Animation (pistas.glb | 0–80)</title>
+  <title>WebAR MindAR — pistas.glb (play once, freeze@100)</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
-  <!-- animation-mixer (aframe-extras) -->
+  <!-- animation-mixer (optional helper) -->
   <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js" defer></script>
 
   <style>
@@ -33,79 +33,104 @@
 
     <a-camera look-controls="enabled:false"></a-camera>
 
-    <a-entity mindar-image-target="targetIndex: 0">
+    <a-entity mindar-image-target="targetIndex: 0" id="anchor">
       <a-entity id="pistas"
         gltf-model="#pistasmodel"
         position="0 0 0.02"
         rotation="0 0 0"
         scale="0.35 0.35 0.35"
-        animation-mixer="clip:*; loop: repeat; repetitions: Infinity"
-        clip-range="start:0; end:80; fps:30">
+        play-once-frames="start:0; end:100; fps:30">
       </a-entity>
     </a-entity>
   </a-scene>
 
   <script>
-    // Mantém a animação limitada ao intervalo [0, 80) em frames, em loop
-    AFRAME.registerComponent('clip-range', {
+    // Reproduz UMA VEZ do frame 'start' ao 'end' e congela no 'end' até o target se perder.
+    AFRAME.registerComponent('play-once-frames', {
       schema: {
         start: {type: 'int', default: 0},
-        end:   {type: 'int', default: 80},
+        end:   {type: 'int', default: 100},
         fps:   {type: 'number', default: 30}
       },
       init: function () {
         this.mixer = null;
         this.action = null;
+        this.clip = null;
         this.startSec = 0;
         this.endSec = 0;
-        this._onModel = this._onModel.bind(this);
-        this.el.addEventListener('model-loaded', this._onModel);
+        this.done = false;
+
+        this.onModel = this.onModel.bind(this);
+        this.onFound = this.onFound.bind(this);
+        this.onLost  = this.onLost.bind(this);
+
+        this.el.addEventListener('model-loaded', this.onModel);
+        // Eventos do MindAR borbulham; ouvimos no próprio entity
+        this.el.addEventListener('targetFound', this.onFound);
+        this.el.addEventListener('targetLost', this.onLost);
       },
       remove: function () {
-        this.el.removeEventListener('model-loaded', this._onModel);
+        this.el.removeEventListener('model-loaded', this.onModel);
+        this.el.removeEventListener('targetFound', this.onFound);
+        this.el.removeEventListener('targetLost', this.onLost);
         if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
       },
-      _onModel: function (e) {
+      onModel: function (e) {
         const model = e.detail.model;
         const clips = (model && model.animations) || [];
         if (!clips.length) {
-          console.warn('[clip-range] Nenhuma animação encontrada no GLB (pistas.glb).');
+          console.warn('[play-once-frames] Nenhuma animação encontrada em pistas.glb.');
           return;
         }
-        const mixer = this.el.components['animation-mixer']?.mixer || new THREE.AnimationMixer(model);
-        this.mixer = mixer;
-        const actions = mixer._actions || [];
-        this.action = actions.length ? actions[0] : mixer.clipAction(clips[0]);
+        this.clip = clips[0];
+        this.mixer = this.el.components['animation-mixer']?.mixer || new THREE.AnimationMixer(model);
+        this.action = this.mixer.clipAction(this.clip);
+        this.action.loop = THREE.LoopOnce;
+        this.action.clampWhenFinished = true; // mantém o último frame
         this.action.enabled = true;
-        this.action.clampWhenFinished = false;
-        this.action.loop = THREE.LoopRepeat;
-        this.action.play();
 
         const fps = Math.max(1, this.data.fps);
         this.startSec = Math.max(0, (this.data.start || 0) / fps);
-        const fullDur = clips[0].duration;
+        const fullDur = this.clip.duration;
         const endSecRequested = (this.data.end || 0) / fps;
         this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
 
+        // Inicializa parado no frame inicial
+        this.action.paused = true;
         this.action.time = this.startSec;
         this.mixer.setTime(this.startSec);
+        this.done = false;
+      },
+      onFound: function () {
+        if (!this.action) return;
+        // Reinicia do começo sempre que reencontrar o target
+        this.done = false;
+        this.action.reset();
+        this.action.loop = THREE.LoopOnce;
+        this.action.clampWhenFinished = true;
+        this.action.paused = false;
+        this.action.play();
+      },
+      onLost: function () {
+        if (!this.action) return;
+        // Ao perder o target: volta ao início e pausa (para reproduzir novamente no próximo found)
+        this.action.paused = true;
+        this.action.time = this.startSec;
+        if (this.mixer) this.mixer.setTime(this.startSec);
+        this.done = false;
       },
       tick: function (t, dt) {
-        if (!this.mixer || !this.action) return;
+        if (!this.mixer || !this.action || this.done) return;
         const delta = (dt || 0) / 1000;
+        // Avança mixer normalmente
         this.mixer.update(delta);
 
-        const range = this.endSec - this.startSec;
-        if (range <= 0) return;
-        let cur = this.action.time;
-        if (cur < this.startSec) {
-          cur = this.startSec + ((cur - this.startSec) % range + range) % range;
-          this.action.time = cur;
-          this.mixer.setTime(cur);
-        } else if (cur >= this.endSec) {
-          cur = this.startSec + ((cur - this.startSec) % range);
-          this.action.time = cur;
-          this.mixer.setTime(cur);
+        // Se passar do endSec, "prende" no endSec e marca como concluído
+        if (this.action.time >= this.endSec) {
+          this.action.time = this.endSec;
+          this.mixer.setTime(this.endSec);
+          this.action.paused = true;
+          this.done = true;
         }
       }
     });
