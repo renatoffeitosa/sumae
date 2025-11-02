@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — pistas.glb (“naosoubau”, loop 0–500)</title>
+  <title>WebAR MindAR — pistas.glb (ALL clips, frames 0–500, auto-FPS)</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
@@ -26,100 +26,115 @@
     style="width:100vw; height:100vh;">
 
     <a-assets timeout="30000">
-      <a-asset-item id="pistasmodel" src="./pistas.glb"></a-asset-item>
+      <a-asset-item id="pistas" src="./pistas.glb"></a-asset-item>
     </a-assets>
 
     <a-camera look-controls="enabled:false"></a-camera>
 
     <a-entity mindar-image-target="targetIndex: 0">
-      <a-entity id="pistas"
-        gltf-model="#pistasmodel"
+      <a-entity id="model"
+        gltf-model="#pistas"
         position="0 0 0.02"
         rotation="0 0 0"
-        scale="0.35 0.35 0.35"
-        clip-range-frames-keep="start:0; end:500; fps:30; clipName:naosoubau">
+        scale="0.4 0.4 0.4"
+        play-all-clips-range-frames="start:0; end:500">
       </a-entity>
     </a-entity>
   </a-scene>
 
   <script>
-    // Loop no intervalo de FRAMES [start, end) e mantém o avanço do tempo mesmo se o target se perder.
-    // Seleciona o clipe "naosoubau" (exatamente esse nome).
-    AFRAME.registerComponent('clip-range-frames-keep', {
-      schema: {
-        start:   {type: 'int', default: 0},
-        end:     {type: 'int', default: 500},
-        fps:     {type: 'number', default: 30},
-        clipName:{type: 'string', default: ''}
-      },
-      init() {
-        this.mixer = null;
-        this.action = null;
-        this.clip = null;
-        this.startSec = 0;
-        this.endSec = 0;
+    // Utilidades de inferência de FPS e restrição de tempo por faixa de frames
+    function median(arr){ if(!arr.length) return 0; const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
+    function nearest(value, candidates){ let best=candidates[0], bd=Infinity; for(const c of candidates){ const d=Math.abs(value-c); if(d<bd){bd=d; best=c;} } return best; }
+    function inferFPSFromClip(clip){
+      // pega a mediana dos deltas de tempos do primeiro track com dados suficientes
+      let deltas=[];
+      for(const track of (clip.tracks||[])){
+        const times = track.times;
+        if(times && times.length>1){
+          for(let i=1;i<times.length;i++){
+            const d = times[i]-times[i-1];
+            if(d>1e-5) deltas.push(d);
+          }
+        }
+      }
+      if(!deltas.length){
+        // fallback: deduz pelos padrões e duração total ~ frames/30
+        return 30;
+      }
+      const med = median(deltas); // em segundos
+      const rawFps = 1/med;
+      // ajusta para FPS de produção comuns
+      const common=[12,15,23.976,24,25,29.97,30,50,59.94,60];
+      return nearest(rawFps, common);
+    }
 
+    AFRAME.registerComponent('play-all-clips-range-frames', {
+      schema: { start:{type:'int',default:0}, end:{type:'int',default:500} },
+      init(){
+        this.mixer = null;
+        this.actions = [];
+        this.ranges = []; // [{startSec,endSec} por action]
         this._onModel = this._onModel.bind(this);
         this.el.addEventListener('model-loaded', this._onModel);
       },
-      remove() {
+      remove(){
         this.el.removeEventListener('model-loaded', this._onModel);
-        if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
+        if (this.mixer){ this.mixer.stopAllAction(); this.mixer=null; }
+        this.actions.length=0; this.ranges.length=0;
+        if(this._tickBound){ this.el.sceneEl.removeEventListener('tick', this._tickBound); this._tickBound=null; }
       },
-      _onModel(e) {
+      _onModel(e){
         const model = e.detail.model;
-        const anims = (model && model.animations) || [];
-        if (!anims.length) {
-          console.warn('[clip-range-frames-keep] Nenhuma animação encontrada em pistas.glb.');
+        const clips = (model && model.animations) || [];
+        console.log('[AUTO-FPS] Clips encontrados:', clips.map(c=>({name:c.name, duration:c.duration.toFixed(3)})));
+        if(!clips.length){
+          console.warn('[AUTO-FPS] Nenhuma animação no GLB. Verifique a exportação.');
           return;
         }
-        const wanted = (this.data.clipName || '').trim();
-        let clip = anims[0];
-        if (wanted) {
-          const byName = anims.find(c => (c.name||'') === wanted);
-          if (byName) clip = byName;
-          else console.warn(`[clip-range-frames-keep] Clip "${wanted}" não encontrado. Usando primeiro clip: "${clip.name}".`);
-        }
-        this.clip = clip;
-
         this.mixer = new THREE.AnimationMixer(model);
-        this.action = this.mixer.clipAction(this.clip);
-        this.action.loop = THREE.LoopRepeat;
-        this.action.clampWhenFinished = false;
-        this.action.enabled = true;
-        this.action.play();
+        const fStart = Math.max(0, this.data.start||0);
+        const fEnd   = Math.max(fStart+1, this.data.end||500);
 
-        const fps = Math.max(1, this.data.fps);
-        this.startSec = Math.max(0, (this.data.start || 0) / fps);
-        const fullDur = this.clip.duration;
-        const endSecRequested = (this.data.end || 0) / fps;
-        this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
+        for(const clip of clips){
+          // FPS por clip
+          const fps = inferFPSFromClip(clip);
+          const startSec = fStart / fps;
+          const endSecReq = fEnd / fps;
+          const endSec = Math.min(clip.duration, Math.max(startSec+1e-3, endSecReq));
+          console.log(`[AUTO-FPS] clip="${clip.name}" fps≈${fps.toFixed(3)} start=${startSec.toFixed(3)}s end=${endSec.toFixed(3)}s dur=${clip.duration.toFixed(3)}s`);
 
-        this.action.time = this.startSec;
-        this.mixer.setTime(this.startSec);
+          const action = this.mixer.clipAction(clip);
+          action.loop = THREE.LoopRepeat;
+          action.clampWhenFinished = false;
+          action.enabled = true;
+          action.play();
+          action.time = startSec;
+          this.actions.push(action);
+          this.ranges.push({startSec, endSec});
+        }
+        this.mixer.setTime(this.ranges[0]?.startSec || 0);
 
-        // Avança mixer a cada frame (mesmo se o target sair do quadro)
-        const sceneEl = this.el.sceneEl;
-        const update = (evt) => {
-          if (!this.mixer || !this.action) return;
-          const delta = (evt && evt.detail && evt.detail.delta ? evt.detail.delta / 1000 : 0.016);
+        // Atualiza SEMPRE (mesmo se target perder tracking)
+        this._tickBound = (evt)=>{
+          if(!this.mixer) return;
+          const delta = (evt && evt.detail && evt.detail.delta ? evt.detail.delta/1000 : 0.016);
           this.mixer.update(delta);
-          const range = this.endSec - this.startSec;
-          if (range > 0) {
-            let cur = this.action.time;
-            if (cur < this.startSec) {
-              cur = this.startSec + ((cur - this.startSec) % range + range) % range;
-              this.action.time = cur; this.mixer.setTime(cur);
-            } else if (cur >= this.endSec) {
-              cur = this.startSec + ((cur - this.startSec) % range);
-              this.action.time = cur; this.mixer.setTime(cur);
+          for(let i=0;i<this.actions.length;i++){
+            const a = this.actions[i]; const r = this.ranges[i];
+            const range = r.endSec - r.startSec;
+            if(range<=0) continue;
+            let cur = a.time;
+            if (cur < r.startSec){
+              cur = r.startSec + ((cur - r.startSec) % range + range) % range;
+              a.time = cur; this.mixer.setTime(cur);
+            } else if (cur >= r.endSec){
+              cur = r.startSec + ((cur - r.startSec) % range);
+              a.time = cur; this.mixer.setTime(cur);
             }
           }
         };
-        if (!sceneEl.hasOwnProperty('_clipRangeKeepBound')) {
-          sceneEl._clipRangeKeepBound = update;
-          sceneEl.addEventListener('tick', sceneEl._clipRangeKeepBound);
-        }
+        this.el.sceneEl.addEventListener('tick', this._tickBound);
       }
     });
   </script>
