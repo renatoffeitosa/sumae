@@ -2,153 +2,117 @@
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-<!doctype html>
-<html lang="pt-br">
-<head>
-  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — Camera + Hint + Logo</title>
+  <title>WebAR MindAR — 3D Animation (frames 0–80)</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
 
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: transparent;
-      overflow: hidden;
-    }
-
-    .a-canvas, canvas { background: transparent !important; display: block; }
-    body, a-scene { width: 100vw; height: 100vh; }
-
-    /* Caixa azul da frase no topo */
-    #hint {
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 94, 255, 0.85);
-      border-radius: 12px;
-      padding: 6px 14px;
-      text-align: center;
-      font: 400 10pt/1.2 system-ui, -apple-system, Roboto, Arial, sans-serif;
-      color: #fff;
-      pointer-events: none;
-      user-select: none;
-      z-index: 9999;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
-    }
-
-    /* Logo inferior ampliada */
-    #logo {
-      position: fixed;
-      bottom: 20px;
-      left: 0;
-      right: 0;
-      display: flex;
-      justify-content: center;
-      pointer-events: none;
-      z-index: 9999;
-    }
-
-    #logo img {
-      max-width: 80vw;  /* dobro do tamanho anterior */
-      height: auto;
-      display: block;
-    }
+    /* Mostrar o ambiente real (feed da câmera) */
+    html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
+    .a-canvas, canvas { background:transparent !important; display:block; }
+    body, a-scene { width:100vw; height:100vh; }
   </style>
 </head>
 <body>
 
-  <!-- Caixa azul com a frase -->
-  <div id="hint">aponte a câmera para a carta</div>
-
-  <!-- Logo inferior -->
-  <div id="logo">
-    <img src="./LOGO_DUOMEMO.png" alt="LOGO_DUOMEMO" />
-  </div>
-
   <a-scene
-    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 1"
+    mindar-image="imageTargetSrc: ./target.mind; maxTrack: 1"
     renderer="alpha:true; antialias:false; physicallyCorrectLights:false"
     embedded
     vr-mode-ui="enabled:false"
     device-orientation-permission-ui="enabled:false"
     style="width:100vw; height:100vh;">
-    
-    <a-assets timeout="15000">
-      <video id="vid" preload="metadata" playsinline webkit-playsinline muted loop crossorigin="anonymous"></video>
+
+    <a-assets timeout="20000">
+      <!-- Apenas o modelo GLB exigido -->
+      <a-asset-item id="plantamodel" src="./PLANTA.glb"></a-asset-item>
     </a-assets>
 
     <a-camera look-controls="enabled:false"></a-camera>
-    <a-entity id="anchors"></a-entity>
+
+    <!-- Anchor do target (index 0) -->
+    <a-entity mindar-image-target="targetIndex: 0">
+      <!-- Modelo 3D com componente custom para loop entre frames 0 e 80 -->
+      <a-entity
+        id="plant"
+        gltf-model="#plantamodel"
+        position="0 0 0.05"
+        rotation="0 0 0"
+        scale="0.2 0.2 0.2"
+        clip-range="start: 0; end: 80; fps: 30">
+      </a-entity>
+    </a-entity>
   </a-scene>
 
   <script>
-    const VIDEO_MAP = { 0: "COMER.mp4" };
-
-    const vid = document.getElementById('vid');
-    const anchorsRoot = document.getElementById('anchors');
-
-    const setPlaneAspect = (planeEl) => {
-      if (!vid.videoWidth || !vid.videoHeight) return;
-      const aspect = vid.videoHeight / vid.videoWidth;
-      const w = 1.0;
-      planeEl.setAttribute('width', w);
-      planeEl.setAttribute('height', (w * aspect).toFixed(5));
-    };
-
-    let lockedIndex = null;
-
-    Object.keys(VIDEO_MAP).forEach((k) => {
-      const i = parseInt(k, 10);
-
-      const anchor = document.createElement('a-entity');
-      anchor.setAttribute('mindar-image-target', `targetIndex: ${i}`);
-
-      const plane = document.createElement('a-plane');
-      plane.setAttribute('position', '0 0 0.01');
-      plane.setAttribute('width', '1');
-      plane.setAttribute('height', '0.5625');
-      plane.setAttribute('material', 'shader: flat; src: #vid; transparent:false; color:#FFF;');
-      
-      anchor.appendChild(plane);
-      anchorsRoot.appendChild(anchor);
-
-      anchor.addEventListener('targetFound', async () => {
-        if (lockedIndex !== null && lockedIndex !== i) return;
-        lockedIndex = i;
-
-        const desiredSrc = VIDEO_MAP[i];
-        if (vid.getAttribute('src') !== desiredSrc) {
-          vid.setAttribute('src', desiredSrc);
-          try { vid.load?.(); } catch(e) {}
+    // Componente para reproduzir apenas um intervalo de frames (0–80) em loop.
+    // Assume fps=30 (ajuste se sua animação tiver outro fps). Se o clipe for menor,
+    // o intervalo será limitado à duração do clipe.
+    AFRAME.registerComponent('clip-range', {
+      schema: {
+        start: {type: 'int', default: 0},
+        end:   {type: 'int', default: 80},
+        fps:   {type: 'number', default: 30}
+      },
+      init: function () {
+        this.mixer = null;
+        this.action = null;
+        this.clip = null;
+        this.startSec = 0;
+        this.endSec = 0;
+        this._onModel = this._onModel.bind(this);
+        this.el.addEventListener('model-loaded', this._onModel);
+      },
+      remove: function () {
+        this.el.removeEventListener('model-loaded', this._onModel);
+        if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
+      },
+      _onModel: function (e) {
+        const model = e.detail.model; // THREE.Group do GLTF
+        const clips = model && model.animations ? model.animations : [];
+        if (!clips || !clips.length) {
+          console.warn('[clip-range] Nenhuma animação encontrada no GLB.');
+          return;
         }
+        this.clip = clips[0]; // usa o primeiro clipe do GLB
+        this.mixer = new THREE.AnimationMixer(model);
+        this.action = this.mixer.clipAction(this.clip);
+        this.action.clampWhenFinished = false;
+        this.action.loop = THREE.LoopRepeat;
+        this.action.enabled = true;
+        this.action.play();
 
-        try { await vid.play(); } catch(e) {}
+        const fps = Math.max(1, this.data.fps);
+        this.startSec = Math.max(0, (this.data.start || 0) / fps);
+        const fullDur = this.clip.duration;
+        const endSecRequested = (this.data.end || 0) / fps;
+        this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
 
-        if (vid.readyState >= 1) setPlaneAspect(plane);
-        else vid.addEventListener('loadedmetadata', () => setPlaneAspect(plane), { once:true });
-      });
+        this.action.time = this.startSec;
+        this.mixer.setTime(this.startSec);
+      },
+      tick: function (t, dt) {
+        if (!this.mixer || !this.action) return;
+        const delta = (dt || 0) / 1000;
+        this.mixer.update(delta);
 
-      anchor.addEventListener('targetLost', () => {
-        if (lockedIndex === i) {
-          vid.pause();
-          lockedIndex = null;
+        const range = this.endSec - this.startSec;
+        if (range <= 0) return;
+        let cur = this.action.time;
+        if (cur < this.startSec) {
+          cur = this.startSec + ((cur - this.startSec) % range + range) % range;
+          this.action.time = cur;
+          this.mixer.setTime(cur);
+        } else if (cur >= this.endSec) {
+          cur = this.startSec + ((cur - this.startSec) % range);
+          this.action.time = cur;
+          this.mixer.setTime(cur);
         }
-      });
+      }
     });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) vid.pause();
-      else if (lockedIndex !== null) vid.play().catch(()=>{});
-    });
-
-    window.addEventListener('webglcontextlost', (e) => { e.preventDefault(); location.reload(); }, false);
   </script>
 </body>
 </html>
