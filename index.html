@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — 3D Animation (frames 0–80)</title>
+  <title>WebAR MindAR — GLB Animation Fix (0–80)</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
+  <!-- animation-mixer (aframe-extras) -->
+  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js" defer></script>
 
   <style>
-    /* Mostrar o ambiente real (feed da câmera) */
     html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
     .a-canvas, canvas { background:transparent !important; display:block; }
     body, a-scene { width:100vw; height:100vh; }
@@ -20,37 +21,34 @@
 
   <a-scene
     mindar-image="imageTargetSrc: ./target.mind; maxTrack: 1"
-    renderer="alpha:true; antialias:false; physicallyCorrectLights:false"
+    renderer="alpha:true; antialias:false; physicallyCorrectLights:false; powerPreference:high-performance"
     embedded
     vr-mode-ui="enabled:false"
     device-orientation-permission-ui="enabled:false"
     style="width:100vw; height:100vh;">
 
-    <a-assets timeout="20000">
-      <!-- Apenas o modelo GLB exigido -->
+    <a-assets timeout="25000">
       <a-asset-item id="plantamodel" src="./PLANTA.glb"></a-asset-item>
     </a-assets>
 
     <a-camera look-controls="enabled:false"></a-camera>
 
-    <!-- Anchor do target (index 0) -->
     <a-entity mindar-image-target="targetIndex: 0">
-      <!-- Modelo 3D com componente custom para loop entre frames 0 e 80 -->
-      <a-entity
-        id="plant"
+      <!-- Usa animation-mixer para garantir que qualquer clip encontrado toque -->
+      <a-entity id="plant"
         gltf-model="#plantamodel"
-        position="0 0 0.05"
+        position="0 0 0.02"
         rotation="0 0 0"
-        scale="0.2 0.2 0.2"
-        clip-range="start: 0; end: 80; fps: 30">
+        scale="0.35 0.35 0.35"
+        animation-mixer="clip:*; loop: repeat; repetitions: Infinity"
+        clip-range="start:0; end:80; fps:30">
       </a-entity>
     </a-entity>
   </a-scene>
 
   <script>
-    // Componente para reproduzir apenas um intervalo de frames (0–80) em loop.
-    // Assume fps=30 (ajuste se sua animação tiver outro fps). Se o clipe for menor,
-    // o intervalo será limitado à duração do clipe.
+    // Component: força a animação a ficar no intervalo de frames [start, end) em loop
+    // Funciona em conjunto com animation-mixer (aframe-extras), garantindo que haja uma ação tocando.
     AFRAME.registerComponent('clip-range', {
       schema: {
         start: {type: 'int', default: 0},
@@ -60,7 +58,6 @@
       init: function () {
         this.mixer = null;
         this.action = null;
-        this.clip = null;
         this.startSec = 0;
         this.endSec = 0;
         this._onModel = this._onModel.bind(this);
@@ -71,23 +68,27 @@
         if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
       },
       _onModel: function (e) {
-        const model = e.detail.model; // THREE.Group do GLTF
-        const clips = model && model.animations ? model.animations : [];
-        if (!clips || !clips.length) {
+        const model = e.detail.model;
+        const clips = (model && model.animations) || [];
+        if (!clips.length) {
           console.warn('[clip-range] Nenhuma animação encontrada no GLB.');
           return;
         }
-        this.clip = clips[0]; // usa o primeiro clipe do GLB
-        this.mixer = new THREE.AnimationMixer(model);
-        this.action = this.mixer.clipAction(this.clip);
+        // Pega a ação atualmente tocando do animation-mixer (se existir), senão cria uma com o primeiro clip
+        const mixer = this.el.components['animation-mixer']?.mixer || new THREE.AnimationMixer(model);
+        this.mixer = mixer;
+
+        // Se animation-mixer não criou ação, criamos uma do primeiro clipe
+        const actions = mixer._actions || [];
+        this.action = actions.length ? actions[0] : mixer.clipAction(clips[0]);
+        this.action.enabled = true;
         this.action.clampWhenFinished = false;
         this.action.loop = THREE.LoopRepeat;
-        this.action.enabled = true;
         this.action.play();
 
         const fps = Math.max(1, this.data.fps);
         this.startSec = Math.max(0, (this.data.start || 0) / fps);
-        const fullDur = this.clip.duration;
+        const fullDur = clips[0].duration; // seg
         const endSecRequested = (this.data.end || 0) / fps;
         this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
 
