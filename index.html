@@ -61,9 +61,9 @@
     });
     // ======================================================================
 
-    // === Loop de frames 0–80 (mantém do código anterior) ==================
+    // === Loop de frames 0–100 (mantém do código anterior) ==================
     AFRAME.registerComponent('clip-range', {
-      schema: { start:{type:'int',default:0}, end:{type:'int',default:80}, fps:{type:'number',default:30} },
+      schema: { start:{type:'int',default:0}, end:{type:'int',default:100}, fps:{type:'number',default:30} },
       init: function () {
         this.mixer=null; this.action=null; this.startSec=0; this.endSec=0;
         this._onModel = this._onModel.bind(this);
