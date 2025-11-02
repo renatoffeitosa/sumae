@@ -3,102 +3,152 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-  <title>WebAR – PLANTA com câmera visível</title>
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>WebAR MindAR — Camera + Hint + Logo</title>
 
   <!-- A-Frame + MindAR -->
-  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
 
   <style>
     html, body {
       margin: 0;
       padding: 0;
-      width: 100%;
-      height: 100%;
+      background: transparent;
       overflow: hidden;
-      background: #000;
     }
-    /* IMPORTANTE: agora não forçamos a transparência total do canvas */
-    .a-canvas, canvas {
-      position: fixed !important;
-      top: 0;
+
+    .a-canvas, canvas { background: transparent !important; display: block; }
+    body, a-scene { width: 100vw; height: 100vh; }
+
+    /* Caixa azul da frase no topo */
+    #hint {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 94, 255, 0.85);
+      border-radius: 12px;
+      padding: 6px 14px;
+      text-align: center;
+      font: 400 10pt/1.2 system-ui, -apple-system, Roboto, Arial, sans-serif;
+      color: #fff;
+      pointer-events: none;
+      user-select: none;
+      z-index: 9999;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    }
+
+    /* Logo inferior ampliada */
+    #logo {
+      position: fixed;
+      bottom: 20px;
       left: 0;
-      width: 100% !important;
-      height: 100% !important;
-      /* sem background transparent aqui, deixa MindAR mostrar a câmera */
+      right: 0;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    #logo img {
+      max-width: 80vw;  /* dobro do tamanho anterior */
+      height: auto;
+      display: block;
     }
   </style>
 </head>
 <body>
 
-<a-scene
-    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 1; autoStart: true"
-    renderer="colorManagement: true, physicallyCorrectLights: true"
+  <!-- Caixa azul com a frase -->
+  <div id="hint">aponte a câmera para a carta</div>
+
+  <!-- Logo inferior -->
+  <div id="logo">
+    <img src="./LOGO_DUOMEMO.png" alt="LOGO_DUOMEMO" />
+  </div>
+
+  <a-scene
+    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 1"
+    renderer="alpha:true; antialias:false; physicallyCorrectLights:false"
     embedded
-    vr-mode-ui="enabled: false"
-    device-orientation-permission-ui="enabled: false"
-    style="position: fixed; width: 100vw; height: 100vh; top: 0; left: 0;">
+    vr-mode-ui="enabled:false"
+    device-orientation-permission-ui="enabled:false"
+    style="width:100vw; height:100vh;">
+    
+    <a-assets timeout="15000">
+      <video id="vid" preload="metadata" playsinline webkit-playsinline muted loop crossorigin="anonymous"></video>
+    </a-assets>
 
-  <a-assets>
-    <a-asset-item id="plantamodel" src="./PLANTA.glb"></a-asset-item>
-  </a-assets>
+    <a-camera look-controls="enabled:false"></a-camera>
+    <a-entity id="anchors"></a-entity>
+  </a-scene>
 
-  <a-camera look-controls="enabled: false"></a-camera>
+  <script>
+    const VIDEO_MAP = { 0: "COMER.mp4" };
 
-  <a-entity id="anchor" mindar-image-target="targetIndex: 0">
-    <a-entity id="plantNode"
-      gltf-model="#plantamodel"
-      position="0 0 0"
-      rotation="0 180 0"
-      scale="0.5 0.5 0.5">
-    </a-entity>
-  </a-entity>
+    const vid = document.getElementById('vid');
+    const anchorsRoot = document.getElementById('anchors');
 
-</a-scene>
+    const setPlaneAspect = (planeEl) => {
+      if (!vid.videoWidth || !vid.videoHeight) return;
+      const aspect = vid.videoHeight / vid.videoWidth;
+      const w = 1.0;
+      planeEl.setAttribute('width', w);
+      planeEl.setAttribute('height', (w * aspect).toFixed(5));
+    };
 
-<script>
-  const FPS = 30;
-  const startFrame = 0;
-  const endFrame = 80;
+    let lockedIndex = null;
 
-  let mixer = null;
-  let action = null;
+    Object.keys(VIDEO_MAP).forEach((k) => {
+      const i = parseInt(k, 10);
 
-  const anchor = document.getElementById('anchor');
-  const plantNode = document.getElementById('plantNode');
+      const anchor = document.createElement('a-entity');
+      anchor.setAttribute('mindar-image-target', `targetIndex: ${i}`);
 
-  plantNode.addEventListener('model-loaded', (e) => {
-    const model = plantNode.getObject3D('mesh');
-    const animations = e.detail.model.animations;
+      const plane = document.createElement('a-plane');
+      plane.setAttribute('position', '0 0 0.01');
+      plane.setAttribute('width', '1');
+      plane.setAttribute('height', '0.5625');
+      plane.setAttribute('material', 'shader: flat; src: #vid; transparent:false; color:#FFF;');
+      
+      anchor.appendChild(plane);
+      anchorsRoot.appendChild(anchor);
 
-    if (!animations || animations.length === 0) {
-      console.log("Sem animações no modelo!");
-      return;
-    }
+      anchor.addEventListener('targetFound', async () => {
+        if (lockedIndex !== null && lockedIndex !== i) return;
+        lockedIndex = i;
 
-    mixer = new THREE.AnimationMixer(model);
-    const baseClip = animations[0];
-    const subClip = THREE.AnimationUtils.subclip(baseClip, 'clipRange', startFrame, endFrame, FPS);
+        const desiredSrc = VIDEO_MAP[i];
+        if (vid.getAttribute('src') !== desiredSrc) {
+          vid.setAttribute('src', desiredSrc);
+          try { vid.load?.(); } catch(e) {}
+        }
 
-    anchor.addEventListener('targetFound', () => {
-      action = mixer.clipAction(subClip);
-      action.reset();
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.play();
+        try { await vid.play(); } catch(e) {}
+
+        if (vid.readyState >= 1) setPlaneAspect(plane);
+        else vid.addEventListener('loadedmetadata', () => setPlaneAspect(plane), { once:true });
+      });
+
+      anchor.addEventListener('targetLost', () => {
+        if (lockedIndex === i) {
+          vid.pause();
+          lockedIndex = null;
+        }
+      });
     });
 
-    anchor.addEventListener('targetLost', () => {
-      if (action) action.stop();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) vid.pause();
+      else if (lockedIndex !== null) vid.play().catch(()=>{});
     });
-  });
 
-  AFRAME.registerComponent('tick-anim', {
-    tick: function (time, delta) {
-      if (mixer) mixer.update(delta / 1000);
-    }
-  });
-  document.querySelector('a-scene').setAttribute('tick-anim', '');
-</script>
-
+    window.addEventListener('webglcontextlost', (e) => { e.preventDefault(); location.reload(); }, false);
+  </script>
 </body>
 </html>
