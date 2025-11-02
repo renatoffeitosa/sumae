@@ -39,7 +39,7 @@
         position="0 0 0.02"
         rotation="0 0 0"
         scale="0.35 0.35 0.35"
-        play-once-frames="start:0; end:100; fps:30">
+        play-once-frames="start:0; end:100; fps:24">
       </a-entity>
     </a-entity>
   </a-scene>
@@ -65,7 +65,7 @@
       schema: {
         start: {type: 'int', default: 0},
         end:   {type: 'int', default: 100},
-        fps:   {type: 'number', default: 30}
+        fps:   {type: 'number', default: 24}
       },
       init: function () {
         this.mixer = null;
