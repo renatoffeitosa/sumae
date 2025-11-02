@@ -3,13 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — pistas.glb (loop frames 0–500)</title>
+  <title>WebAR MindAR — pistas.glb (loop 0–20s)</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
-  <!-- animation-mixer (aframe-extras) -->
-  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js" defer></script>
 
   <style>
     html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
@@ -39,42 +37,38 @@
         position="0 0 0.02"
         rotation="0 0 0"
         scale="0.35 0.35 0.35"
-        animation-mixer="clip:*; loop: repeat; repetitions: Infinity"
-        clip-range="start:0; end:500; fps:24">
+        clip-range-seconds="start:0; end:20">
       </a-entity>
     </a-entity>
   </a-scene>
 
   <script>
-    // Mantém a animação looping apenas dentro do intervalo [start, end) em frames.
-    AFRAME.registerComponent('clip-range', {
-      schema: {
-        start: {type: 'int', default: 0},
-        end:   {type: 'int', default: 500},
-        fps:   {type: 'number', default: 30}
-      },
-      init: function () {
+    // Controla a animação por SEGUNDOS, fazendo loop no intervalo [start, end)
+    AFRAME.registerComponent('clip-range-seconds', {
+      schema:{ start:{type:'number', default:0}, end:{type:'number', default:20} },
+      init(){
         this.mixer = null;
         this.action = null;
         this.clip = null;
-        this.startSec = 0;
-        this.endSec = 0;
+        this.start = 0;
+        this.end = 0;
 
         this._onModel = this._onModel.bind(this);
         this.el.addEventListener('model-loaded', this._onModel);
       },
-      remove: function () {
+      remove(){
         this.el.removeEventListener('model-loaded', this._onModel);
         if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
       },
-      _onModel: function (e) {
+      _onModel(e){
         const model = e.detail.model;
         const clips = (model && model.animations) || [];
         if (!clips.length) {
-          console.warn('[clip-range] Nenhuma animação encontrada em pistas.glb.');
+          console.warn('[clip-range-seconds] Nenhuma animação encontrada em pistas.glb.');
           return;
         }
         this.clip = clips[0];
+
         this.mixer = new THREE.AnimationMixer(model);
         this.action = this.mixer.clipAction(this.clip);
         this.action.loop = THREE.LoopRepeat;
@@ -82,33 +76,28 @@
         this.action.enabled = true;
         this.action.play();
 
-        const fps = Math.max(1, this.data.fps);
-        this.startSec = Math.max(0, (this.data.start || 0) / fps);
-        const fullDur = this.clip.duration;
-        const endSecRequested = (this.data.end || 0) / fps;
-        this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
+        const full = this.clip.duration;
+        this.start = Math.max(0, this.data.start || 0);
+        const desiredEnd = (this.data.end == null ? full : this.data.end);
+        this.end = Math.min(full, Math.max(this.start + 1e-3, desiredEnd));
 
-        // Começa exatamente no início do intervalo
-        this.action.time = this.startSec;
-        this.mixer.setTime(this.startSec);
+        this.action.time = this.start;
+        this.mixer.setTime(this.start);
       },
-      tick: function (t, dt) {
+      tick(t, dt){
         if (!this.mixer || !this.action) return;
         const delta = (dt || 0) / 1000;
         this.mixer.update(delta);
 
-        // Loop contínuo apenas no intervalo [startSec, endSec)
-        const range = this.endSec - this.startSec;
+        const range = this.end - this.start;
         if (range <= 0) return;
         let cur = this.action.time;
-        if (cur < this.startSec) {
-          cur = this.startSec + ((cur - this.startSec) % range + range) % range;
-          this.action.time = cur;
-          this.mixer.setTime(cur);
-        } else if (cur >= this.endSec) {
-          cur = this.startSec + ((cur - this.startSec) % range);
-          this.action.time = cur;
-          this.mixer.setTime(cur);
+        if (cur < this.start) {
+          cur = this.start + ((cur - this.start) % range + range) % range;
+          this.action.time = cur; this.mixer.setTime(cur);
+        } else if (cur >= this.end) {
+          cur = this.start + ((cur - this.start) % range);
+          this.action.time = cur; this.mixer.setTime(cur);
         }
       }
     });
