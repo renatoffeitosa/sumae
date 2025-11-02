@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — pistas.glb (loop 0–20s)</title>
+  <title>WebAR MindAR — pistas.glb (diagnóstico de animação)</title>
 
   <!-- A-Frame + MindAR -->
-  <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <!-- animation-mixer -->
+  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js"></script>
 
   <style>
     html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
@@ -26,81 +28,103 @@
     style="width:100vw; height:100vh;">
 
     <a-assets timeout="30000">
-      <a-asset-item id="pistasmodel" src="./pistas.glb"></a-asset-item>
+      <a-asset-item id="pistas" src="./pistas.glb"></a-asset-item>
     </a-assets>
 
     <a-camera look-controls="enabled:false"></a-camera>
 
-    <a-entity mindar-image-target="targetIndex: 0">
-      <a-entity id="pistas"
-        gltf-model="#pistasmodel"
+    <a-entity id="anchor" mindar-image-target="targetIndex: 0">
+      <a-entity id="model"
+        gltf-model="#pistas"
         position="0 0 0.02"
         rotation="0 0 0"
-        scale="0.35 0.35 0.35"
-        clip-range-seconds="start:0; end:20">
+        scale="0.4 0.4 0.4"
+        animation-mixer="clip:*; loop:repeat; repetitions:Infinity">
       </a-entity>
     </a-entity>
   </a-scene>
 
   <script>
-    // Controla a animação por SEGUNDOS, fazendo loop no intervalo [start, end)
-    AFRAME.registerComponent('clip-range-seconds', {
-      schema:{ start:{type:'number', default:0}, end:{type:'number', default:20} },
-      init(){
-        this.mixer = null;
-        this.action = null;
-        this.clip = null;
-        this.start = 0;
-        this.end = 0;
+    // ---- Diagnóstico: loga clips encontrados e garante play mesmo sem animation-mixer ----
+    const modelEl = document.getElementById('model');
+    const anchorEl = document.getElementById('anchor');
 
-        this._onModel = this._onModel.bind(this);
-        this.el.addEventListener('model-loaded', this._onModel);
-      },
-      remove(){
-        this.el.removeEventListener('model-loaded', this._onModel);
-        if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
-      },
-      _onModel(e){
-        const model = e.detail.model;
-        const clips = (model && model.animations) || [];
-        if (!clips.length) {
-          console.warn('[clip-range-seconds] Nenhuma animação encontrada em pistas.glb.');
-          return;
-        }
-        this.clip = clips[0];
+    let mixer = null;
+    let action = null;
+    let clip = null;
 
-        this.mixer = new THREE.AnimationMixer(model);
-        this.action = this.mixer.clipAction(this.clip);
-        this.action.loop = THREE.LoopRepeat;
-        this.action.clampWhenFinished = false;
-        this.action.enabled = true;
-        this.action.play();
+    // Loga os clips quando o modelo carregar
+    modelEl.addEventListener('model-loaded', (e) => {
+      const model = e.detail.model;
+      const anims = (model && model.animations) || [];
+      console.log('[DEBUG] modelo carregado. Animations count =', anims.length);
+      anims.forEach((c, idx) => console.log(`[DEBUG] clip[${idx}] name="${c.name}" duration=${c.duration.toFixed(3)}s`));
 
-        const full = this.clip.duration;
-        this.start = Math.max(0, this.data.start || 0);
-        const desiredEnd = (this.data.end == null ? full : this.data.end);
-        this.end = Math.min(full, Math.max(this.start + 1e-3, desiredEnd));
-
-        this.action.time = this.start;
-        this.mixer.setTime(this.start);
-      },
-      tick(t, dt){
-        if (!this.mixer || !this.action) return;
-        const delta = (dt || 0) / 1000;
-        this.mixer.update(delta);
-
-        const range = this.end - this.start;
-        if (range <= 0) return;
-        let cur = this.action.time;
-        if (cur < this.start) {
-          cur = this.start + ((cur - this.start) % range + range) % range;
-          this.action.time = cur; this.mixer.setTime(cur);
-        } else if (cur >= this.end) {
-          cur = this.start + ((cur - this.start) % range);
-          this.action.time = cur; this.mixer.setTime(cur);
-        }
+      if (!anims.length) {
+        console.warn('[DEBUG] Nenhuma animação embutida em pistas.glb. O modelo pode ser estático.');
+        return;
       }
+
+      // Tenta usar animation-mixer do A-Frame
+      const am = modelEl.components['animation-mixer'];
+      if (am && am.mixer) {
+        console.log('[DEBUG] animation-mixer detectado. Vai tocar o(s) clip(s).');
+        // Nada a fazer: animation-mixer já está configurado com clip:* loop:repeat
+        // Ainda assim guardamos mixer/clip para controle extra se precisar
+        mixer = am.mixer;
+        // Pega a primeira action viva (se existir)
+        const acts = am.mixer._actions || [];
+        if (acts.length) action = acts[0];
+      } else {
+        // Fallback manual
+        console.log('[DEBUG] animation-mixer não criou mixer. Iniciando fallback manual.');
+        mixer = new THREE.AnimationMixer(model);
+        clip = anims[0];
+        action = mixer.clipAction(clip);
+        action.loop = THREE.LoopRepeat;
+        action.clampWhenFinished = false;
+        action.enabled = true;
+        action.play();
+
+        // Atualiza o mixer todo frame
+        modelEl.sceneEl.addEventListener('renderstart', () => {
+          modelEl.sceneEl.addEventListener('tick', (evt) => {
+            if (!mixer) return;
+            // evt.detail.delta no A-Frame 1.6.0 é ms
+            const delta = (evt.detail && evt.detail.delta) ? evt.detail.delta / 1000 : 0.016;
+            mixer.update(delta);
+          });
+        }, { once:true });
+      }
+    });
+
+    // Só dispara o play quando o target for encontrado (garante visão AR estável)
+    anchorEl.addEventListener('targetFound', () => {
+      console.log('[DEBUG] targetFound');
+      // Em animation-mixer, o play é automático; ainda assim, tentamos garantir:
+      try {
+        const am = modelEl.components['animation-mixer'];
+        if (am && am.mixer && am.mixer._actions && am.mixer._actions.length) {
+          am.mixer._actions.forEach(a => { a.paused = false; a.enabled = true; a.play(); });
+        } else if (action) {
+          action.paused = false; action.enabled = true; action.play();
+        }
+      } catch(e) { console.warn('[DEBUG] erro ao forçar play:', e); }
+    });
+
+    // Quando perder o target, pausa todas as actions (para evitar gasto desnecessário)
+    anchorEl.addEventListener('targetLost', () => {
+      console.log('[DEBUG] targetLost');
+      try {
+        const am = modelEl.components['animation-mixer'];
+        if (am && am.mixer && am.mixer._actions && am.mixer._actions.length) {
+          am.mixer._actions.forEach(a => { a.paused = true; });
+        } else if (action) {
+          action.paused = true;
+        }
+      } catch(e) { console.warn('[DEBUG] erro ao pausar:', e); }
     });
   </script>
 </body>
 </html>
+
