@@ -3,13 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR MindAR — pistas.glb (play once, freeze@100)</title>
+  <title>WebAR MindAR — pistas.glb (play once, freeze@100) — FIX</title>
 
   <!-- A-Frame + MindAR -->
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js" defer></script>
-  <!-- animation-mixer (optional helper) -->
-  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.4.0/dist/aframe-extras.min.js" defer></script>
 
   <style>
     html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
@@ -46,6 +44,7 @@
 
   <script>
     // Reproduz UMA VEZ do frame 'start' ao 'end' e congela no 'end' até o target se perder.
+    // Corrigido: ouve targetFound/targetLost no elemento ÂNCORA (mindar-image-target), não no modelo.
     AFRAME.registerComponent('play-once-frames', {
       schema: {
         start: {type: 'int', default: 0},
@@ -64,15 +63,24 @@
         this.onFound = this.onFound.bind(this);
         this.onLost  = this.onLost.bind(this);
 
+        // Ouve quando o modelo carregar
         this.el.addEventListener('model-loaded', this.onModel);
-        // Eventos do MindAR borbulham; ouvimos no próprio entity
-        this.el.addEventListener('targetFound', this.onFound);
-        this.el.addEventListener('targetLost', this.onLost);
+
+        // Procura o elemento âncora (mindar-image-target) mais próximo
+        this.anchorEl = this.el.closest('[mindar-image-target]') || this.el.parentEl;
+        if (this.anchorEl) {
+          this.anchorEl.addEventListener('targetFound', this.onFound);
+          this.anchorEl.addEventListener('targetLost', this.onLost);
+        } else {
+          console.warn('[play-once-frames] Anchor (mindar-image-target) não encontrado; a animação não será disparada.');
+        }
       },
       remove: function () {
         this.el.removeEventListener('model-loaded', this.onModel);
-        this.el.removeEventListener('targetFound', this.onFound);
-        this.el.removeEventListener('targetLost', this.onLost);
+        if (this.anchorEl) {
+          this.anchorEl.removeEventListener('targetFound', this.onFound);
+          this.anchorEl.removeEventListener('targetLost', this.onLost);
+        }
         if (this.mixer) { this.mixer.stopAllAction(); this.mixer = null; }
       },
       onModel: function (e) {
@@ -83,7 +91,7 @@
           return;
         }
         this.clip = clips[0];
-        this.mixer = this.el.components['animation-mixer']?.mixer || new THREE.AnimationMixer(model);
+        this.mixer = new THREE.AnimationMixer(model);
         this.action = this.mixer.clipAction(this.clip);
         this.action.loop = THREE.LoopOnce;
         this.action.clampWhenFinished = true; // mantém o último frame
@@ -95,15 +103,15 @@
         const endSecRequested = (this.data.end || 0) / fps;
         this.endSec = Math.min(fullDur, Math.max(this.startSec + 1e-3, endSecRequested || fullDur));
 
-        // Inicializa parado no frame inicial
+        // Inicializa congelado no início
         this.action.paused = true;
         this.action.time = this.startSec;
         this.mixer.setTime(this.startSec);
         this.done = false;
       },
       onFound: function () {
-        if (!this.action) return;
-        // Reinicia do começo sempre que reencontrar o target
+        if (!this.action) return; // espera model-loaded
+        // Reinicia e toca uma vez
         this.done = false;
         this.action.reset();
         this.action.loop = THREE.LoopOnce;
@@ -122,10 +130,9 @@
       tick: function (t, dt) {
         if (!this.mixer || !this.action || this.done) return;
         const delta = (dt || 0) / 1000;
-        // Avança mixer normalmente
         this.mixer.update(delta);
 
-        // Se passar do endSec, "prende" no endSec e marca como concluído
+        // Prende o tempo da animação em endSec e marca como concluído
         if (this.action.time >= this.endSec) {
           this.action.time = this.endSec;
           this.mixer.setTime(this.endSec);
