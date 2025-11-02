@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>WebAR – PLANTA com câmera visível</title>
+
+  <!-- A-Frame + MindAR -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+    /* IMPORTANTE: agora não forçamos a transparência total do canvas */
+    .a-canvas, canvas {
+      position: fixed !important;
+      top: 0;
+      left: 0;
+      width: 100% !important;
+      height: 100% !important;
+      /* sem background transparent aqui, deixa MindAR mostrar a câmera */
+    }
+  </style>
+</head>
+<body>
+
+<a-scene
+    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 1; autoStart: true"
+    renderer="colorManagement: true, physicallyCorrectLights: true"
+    embedded
+    vr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false"
+    style="position: fixed; width: 100vw; height: 100vh; top: 0; left: 0;">
+
+  <a-assets>
+    <a-asset-item id="plantamodel" src="./PLANTA.glb"></a-asset-item>
+  </a-assets>
+
+  <a-camera look-controls="enabled: false"></a-camera>
+
+  <a-entity id="anchor" mindar-image-target="targetIndex: 0">
+    <a-entity id="plantNode"
+      gltf-model="#plantamodel"
+      position="0 0 0"
+      rotation="0 180 0"
+      scale="0.5 0.5 0.5">
+    </a-entity>
+  </a-entity>
+
+</a-scene>
+
+<script>
+  const FPS = 30;
+  const startFrame = 0;
+  const endFrame = 80;
+
+  let mixer = null;
+  let action = null;
+
+  const anchor = document.getElementById('anchor');
+  const plantNode = document.getElementById('plantNode');
+
+  plantNode.addEventListener('model-loaded', (e) => {
+    const model = plantNode.getObject3D('mesh');
+    const animations = e.detail.model.animations;
+
+    if (!animations || animations.length === 0) {
+      console.log("Sem animações no modelo!");
+      return;
+    }
+
+    mixer = new THREE.AnimationMixer(model);
+    const baseClip = animations[0];
+    const subClip = THREE.AnimationUtils.subclip(baseClip, 'clipRange', startFrame, endFrame, FPS);
+
+    anchor.addEventListener('targetFound', () => {
+      action = mixer.clipAction(subClip);
+      action.reset();
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.play();
+    });
+
+    anchor.addEventListener('targetLost', () => {
+      if (action) action.stop();
+    });
+  });
+
+  AFRAME.registerComponent('tick-anim', {
+    tick: function (time, delta) {
+      if (mixer) mixer.update(delta / 1000);
+    }
+  });
+  document.querySelector('a-scene').setAttribute('tick-anim', '');
+</script>
+
+</body>
+</html>
